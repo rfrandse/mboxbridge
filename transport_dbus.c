@@ -17,7 +17,7 @@ static int transport_dbus_property_update(struct mbox_context *context,
 					  uint8_t events)
 {
 	/* Two properties plus a terminating NULL */
-	char *props[3] = { 0 };
+	char *props[5] = { 0 };
 	int i = 0;
 	int rc;
 
@@ -29,6 +29,14 @@ static int transport_dbus_property_update(struct mbox_context *context,
 		props[i++] = "DaemonReady";
 	}
 
+	if (events & BMC_EVENT_WINDOW_RESET) {
+		props[i++] = "WindowReset";
+	}
+
+	if (events & BMC_EVENT_PROTOCOL_RESET) {
+		props[i++] = "ProtocolReset";
+	}
+
 	rc = sd_bus_emit_properties_changed_strv(context->bus,
 						 MBOX_DBUS_OBJECT,
 						 /* FIXME: Hard-coding v2 */
@@ -38,90 +46,21 @@ static int transport_dbus_property_update(struct mbox_context *context,
 	return (rc < 0) ? rc : 0;
 }
 
-static int transport_dbus_signal_update(struct mbox_context *context,
-					uint8_t events)
-{
-	int rc;
-
-	/*
-	 * Handle signals - edge triggered, only necessary when they're
-	 * asserted
-	 */
-	if (events & BMC_EVENT_WINDOW_RESET) {
-		sd_bus_message *m = NULL;
-
-		rc = sd_bus_message_new_signal(context->bus, &m,
-					       MBOX_DBUS_OBJECT,
-					       /* FIXME: Hard-coding v2 */
-					       MBOX_DBUS_PROTOCOL_IFACE_V2,
-					       "WindowReset");
-		if (rc < 0) {
-			return rc;
-		}
-
-		rc = sd_bus_send(context->bus, m, NULL);
-		if (rc < 0) {
-			return rc;
-		}
-	}
-
-	if (events & BMC_EVENT_PROTOCOL_RESET) {
-		sd_bus_message *m = NULL;
-
-		rc = sd_bus_message_new_signal(context->bus, &m,
-					       MBOX_DBUS_OBJECT,
-					       /* FIXME: Hard-coding v2 */
-					       MBOX_DBUS_PROTOCOL_IFACE_V2,
-					       "ProtocolReset");
-		if (rc < 0) {
-			return rc;
-		}
-
-		rc = sd_bus_send(context->bus, m, NULL);
-		if (rc < 0) {
-			return rc;
-		}
-	}
-
-	return 0;
-}
 
 static int transport_dbus_put_events(struct mbox_context *context, uint8_t mask)
 {
-	int rc;
-
-	/* Always update all properties */
-	rc = transport_dbus_property_update(context, mask);
-	if (rc < 0) {
-		return rc;
-	}
-
-	/*
-	 * Still test signals against the values set as sending them indicates
-	 * the event has been asserted, so we must not send them if the bits
-	 * are not set.
-	 */
-	return transport_dbus_signal_update(context,
-					    context->bmc_events & mask);
+	return transport_dbus_property_update(context, mask);
 }
 
 static int transport_dbus_set_events(struct mbox_context *context,
 				     uint8_t events, uint8_t mask)
 {
-	int rc;
-
-	rc = transport_dbus_property_update(context, events & mask);
-	if (rc < 0) {
-		return rc;
-	}
-
-	return transport_dbus_signal_update(context, events & mask);
+	return transport_dbus_property_update(context, events & mask);
 }
 
 static int transport_dbus_clear_events(struct mbox_context *context,
 				       uint8_t events, uint8_t mask)
 {
-	/* No need to emit signals for ackable events on clear */
 	return transport_dbus_property_update(context, events & mask);
 }
 
@@ -482,6 +421,10 @@ static int transport_dbus_get_property(sd_bus *bus,
 		value = context->bmc_events & BMC_EVENT_FLASH_CTRL_LOST;
 	} else if (!strcmp("DaemonReady", property)) {
 		value = context->bmc_events & BMC_EVENT_DAEMON_READY;
+	} else if (!strcmp("WindowReset", property)) {
+		value = context->bmc_events & BMC_EVENT_WINDOW_RESET;
+	} else if (!strcmp("ProtocolReset", property)) {
+		value = context->bmc_events & BMC_EVENT_PROTOCOL_RESET;
 	} else {
 		MSG_ERR("Unknown DBus property: %s\n", property);
 		return -EINVAL;
@@ -532,8 +475,14 @@ static const sd_bus_vtable protocol_v2_vtable[] = {
 	SD_BUS_PROPERTY("DaemonReady", "b", transport_dbus_get_property,
 			0, /* Just a pointer to struct mbox_context */
 			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-	SD_BUS_SIGNAL("ProtocolReset", NULL, 0),
-	SD_BUS_SIGNAL("WindowReset", NULL, 0),
+	SD_BUS_PROPERTY("ProtocolReset",  "b",
+			transport_dbus_get_property,
+			0, /* Just a pointer to struct mbox_context */
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("WindowReset", "b",
+			transport_dbus_get_property,
+			0, /* Just a pointer to struct mbox_context */
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 	SD_BUS_VTABLE_END
 };
 
